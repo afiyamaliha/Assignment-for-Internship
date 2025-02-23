@@ -1,263 +1,253 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using System;
-using System.Globalization;
 using Wafi.SampleTest.Dtos;
 using Wafi.SampleTest.Entities;
 
 namespace Wafi.SampleTest.Controllers
 {
-    [Route("api/[controller]")]
+    [Route("api/Bookings")]
     [ApiController]
     public class BookingsController : ControllerBase
     {
         private readonly WafiDbContext _context;
+        private readonly ILogger<BookingsController> _logger;
 
-        public BookingsController(WafiDbContext context)
+        public BookingsController(WafiDbContext context, 
+            ILogger<BookingsController> logger)
         {
             _context = context;
+            _logger = logger;
         }
 
-
+        // GET: api/Bookings
         [HttpGet("Booking")]
         public async Task<IEnumerable<BookingCalendarDto>> GetCalendarBookings(BookingFilterDto input)
         {
-            var bookings = await _context.Bookings
-                .Include(b => b.Car)
-                .Where(b => b.CarId == input.CarId &&
-                            b.BookingDate >= input.StartBookingDate &&
-                            b.BookingDate <= input.EndBookingDate)
-                .ToListAsync();
-
-            var calendar = new Dictionary<DateOnly, List<Booking>>();
-
-            foreach (var booking in bookings)
+            try
             {
-                var currentDate = booking.BookingDate;
-                while (currentDate <= (booking.EndRepeatDate ?? booking.BookingDate))
-                {
-                    if (currentDate < input.StartBookingDate || currentDate > input.EndBookingDate)
-                    {
-                        currentDate = currentDate.AddDays(1);
-                        continue;
-                    }
+                var bookings = await _context.Bookings
+                    .Include(c => c.Car).Where(c => c.CarId == input.CarId &&
+                                c.BookingDate >= input.StartBookingDate &&
+                                c.BookingDate <= input.EndBookingDate).ToListAsync();
 
-                    if (!calendar.ContainsKey(currentDate))
-                        calendar[currentDate] = new List<Booking>();
+                return BookingUtility.GetCalendarBookings(bookings, input.StartBookingDate, input.EndBookingDate);
 
-                    if (booking.RepeatOption == RepeatOption.Weekly && booking.DaysToRepeatOn.HasValue)
-                    {
-                        if (((DaysOfWeek)(1 << (int)currentDate.DayOfWeek) & booking.DaysToRepeatOn.Value) == 0)
-                        {
-                            currentDate = currentDate.AddDays(1);
-                            continue;
-                        }
-                    }
+                //var calendar = new Dictionary<DateOnly, List<Booking>>();
 
-                    calendar[currentDate].Add(booking);
+                //foreach (var booking in bookings)
+                //{
+                //    var currentDate = booking.BookingDate;
+                //    while (currentDate <= (booking.EndRepeatDate ?? booking.BookingDate))
+                //    {
+                //        if (currentDate < input.StartBookingDate || currentDate > input.EndBookingDate)
+                //        {
+                //            currentDate = currentDate.AddDays(1);
+                //            continue;
+                //        }
 
-                    currentDate = booking.RepeatOption switch
-                    {
-                        RepeatOption.Daily => currentDate.AddDays(1),
-                        RepeatOption.Weekly => currentDate.AddDays(7),
-                        _ => booking.EndRepeatDate.HasValue ? booking.EndRepeatDate.Value.AddDays(1) : currentDate.AddDays(1)
-                    };
-                }
+                //        if (!calendar.ContainsKey(currentDate))
+                //            calendar[currentDate] = new List<Booking>();
+
+                //        if (booking.RepeatOption == RepeatOption.Weekly && booking.DaysToRepeatOn.HasValue)
+                //        {
+                //            if (((DaysOfWeek)(1 << (int)currentDate.DayOfWeek) & booking.DaysToRepeatOn.Value) == 0)
+                ////            {
+                //                currentDate = currentDate.AddDays(1);
+                //                continue;
+                //            }
+                //        }
+
+                //        calendar[currentDate].Add(booking);
+
+                //        currentDate = booking.RepeatOption switch
+                //        {
+                //            RepeatOption.Daily => currentDate.AddDays(1),
+                //            RepeatOption.Weekly => currentDate.AddDays(7),
+                //            _ => booking.EndRepeatDate.HasValue ? booking.EndRepeatDate.Value.AddDays(1) : currentDate.AddDays(1)
+                //        };
+                //    }
+                //}
+
+                //List<BookingCalendarDto> result = new List<BookingCalendarDto>();
+                //foreach (var item in calendar)
+                //{
+                //    foreach (var booking in item.Value)
+                //    {
+                //        result.Add(new BookingCalendarDto
+                //        {
+                //            BookingDate = item.Key,
+                //            CarModel = booking.Car.Model,
+                //            StartTime = booking.StartTime,
+                //            EndTime = booking.EndTime
+                //        });
+                //    }
+                //}
+
+                //return result;
             }
-
-            var result = new List<BookingCalendarDto>();
-            foreach (var item in calendar)
+            catch (Exception ex)
             {
-                foreach (var booking in item.Value)
-                {
-                    result.Add(new BookingCalendarDto
-                    {
-                        BookingDate = item.Key,
-                        CarModel = booking.Car.Model,
-                        StartTime = booking.StartTime,
-                        EndTime = booking.EndTime
-                    });
-                }
+                _logger.LogInformation(ex, "Failed to GetCalendarBookings method...");
+                throw new InvalidOperationException(ex.Message);
             }
-
-            return result;
         }
 
 
-        //// GET: api/Bookings
-        //[HttpGet("Booking")]
-        //public async Task<IEnumerable<BookingCalendarDto>> GetCalendarBookings(BookingFilterDto input)
-        //{
-        //    // Get booking from the database and filter the data
-        //    //var bookings = await _context.Bookings.ToListAsync();
-
-        //    // TO DO: convert the database bookings to calendar view (date, start time, end time). Consiser NoRepeat, Daily and Weekly options
-        //    //return bookings;
-
-        //    throw new NotImplementedException();
-        //}
-
+        //POST: api/Bookings
         [HttpPost("Booking")]
-        public async Task<CreateUpdateBookingDto> PostBooking(CreateUpdateBookingDto bookingDto)
+        public async Task<CreateUpdateBookingDto> PostBooking(CreateUpdateBookingDto booking)
         {
-            // Step 1: Get all bookings from the database (include Car data if needed)
-            var existingBookings = await _context.Bookings.Include(b => b.Car).ToListAsync();
+            var existingBookings = await _context.Bookings.Include(c => c.Car).ToListAsync();
 
-            // Step 2: Expand existing bookings to include all recurring instances
-            var expandedBookings = ExpandRecurringBookings(existingBookings, bookingDto.BookingDate, bookingDto.EndRepeatDate ?? bookingDto.BookingDate);
+            var recurringBookings = BookingUtility.recurringBookings(existingBookings, 
+                    booking.BookingDate, booking.EndRepeatDate ?? booking.BookingDate);
 
-            // Step 3: Check for conflicts
-            if (expandedBookings.Any(b => CheckBookingConflict(b, bookingDto)))
+            if (BookingUtility.checkBookingConflictOrNot(recurringBookings, booking))
             {
-                throw new InvalidOperationException("Booking time conflicts with an existing booking.");
+                throw new InvalidOperationException("Time conflicts with an existing booking.");
             }
 
-            // Step 4: Map DTO to entity
-            var booking = new Booking
+            var newBooking = new Booking
             {
                 Id = Guid.NewGuid(),
-                BookingDate = bookingDto.BookingDate,
-                StartTime = bookingDto.StartTime,
-                EndTime = bookingDto.EndTime,
-                RepeatOption = bookingDto.RepeatOption,
-                EndRepeatDate = bookingDto.EndRepeatDate,
-                DaysToRepeatOn = bookingDto.DaysToRepeatOn,
-                RequestedOn = DateTime.UtcNow,
-                CarId = bookingDto.CarId
+                BookingDate = booking.BookingDate,
+                StartTime = booking.StartTime,
+                EndTime = booking.EndTime,
+                RepeatOption = booking.RepeatOption,
+                EndRepeatDate = booking.EndRepeatDate,
+                DaysToRepeatOn = booking.RepeatOption == RepeatOption.Weekly ? booking.DaysToRepeatOn : null,
+                RequestedOn = DateTime.Now,
+                CarId = booking.CarId
             };
 
-            // Step 5: Save booking to database
-            await _context.Bookings.AddAsync(booking);
+            await _context.Bookings.AddAsync(newBooking);
             await _context.SaveChangesAsync();
 
-            return bookingDto;
-        }
-        private List<BookingCalendarDto> ExpandRecurringBookings(List<Booking> bookings, DateOnly startDate, DateOnly endDate)
-        {
-            var calendar = new List<BookingCalendarDto>();
-
-            foreach (var booking in bookings)
-            {
-                var currentDate = booking.BookingDate;
-                while (currentDate <= (booking.EndRepeatDate ?? booking.BookingDate) && currentDate <= endDate)
-                {
-                    if (currentDate >= startDate)
-                    {
-                        if (booking.RepeatOption == RepeatOption.Weekly && booking.DaysToRepeatOn.HasValue)
-                        {
-                            if (((DaysOfWeek)(1 << (int)currentDate.DayOfWeek) & booking.DaysToRepeatOn.Value) == 0)
-                            {
-                                currentDate = currentDate.AddDays(1);
-                                continue;
-                            }
-                        }
-
-                        calendar.Add(new BookingCalendarDto
-                        {
-                            BookingDate = currentDate,
-                            StartTime = booking.StartTime,
-                            EndTime = booking.EndTime,
-                            CarModel = booking.Car?.Model ?? "Unknown"
-                        });
-                    }
-
-                    currentDate = booking.RepeatOption switch
-                    {
-                        RepeatOption.Daily => currentDate.AddDays(1),
-                        RepeatOption.Weekly => currentDate.AddDays(7),
-                        _ => booking.EndRepeatDate.HasValue ? booking.EndRepeatDate.Value.AddDays(1) : currentDate.AddDays(1)
-                    };
-                }
-            }
-
-            return calendar;
-        }
-        private bool CheckBookingConflict(BookingCalendarDto existing, CreateUpdateBookingDto newBooking)
-        {
-            return existing.BookingDate == newBooking.BookingDate &&
-                   !(newBooking.EndTime <= existing.StartTime || newBooking.StartTime >= existing.EndTime);
+            return booking;
         }
 
 
 
+//        [HttpPost("Booking")]
+//        public async Task<CreateUpdateBookingDto> PostBooking(CreateUpdateBookingDto booking)
+//        {
+//            if (!ModelState.IsValid)
+//            {
+//                throw new InvalidOperationException("Booking information invalid.");
+//            }
+//            try
+//            {
+//                var existingBookings = await _context.Bookings.Include(c => c.Car).ToListAsync();
 
+//                var recurringBookingsList = recurringBookings(existingBookings, booking.BookingDate, booking.EndRepeatDate ?? booking.BookingDate);
 
-        // POST: api/Bookings
-        //[HttpPost("Booking")]
-        //public async Task<CreateUpdateBookingDto> PostBooking(CreateUpdateBookingDto booking)
-        //{
-        //    // TO DO: Validate if any booking time conflicts with existing data. Return error if any conflicts
+//                if (recurringBookingsList.Any(c => bookingConflictOrNot(c, booking)))
+//                {
+//                    throw new InvalidOperationException("Booking time conflicts with an existing booking...");
+//                }
 
-        //    //await _context.Bookings.AddAsync(booking);
-        //    //await _context.SaveChangesAsync();
+//                var newBooking = new Booking
+//        {
+//            Id = Guid.NewGuid(),
+//            BookingDate = booking.BookingDate,
+//            StartTime = booking.StartTime,
+//            EndTime = booking.EndTime,
+//            RepeatOption = booking.RepeatOption,
+//            EndRepeatDate = booking.EndRepeatDate,
+//            DaysToRepeatOn = booking.DaysToRepeatOn,
+//            RequestedOn = DateTime.UtcNow,
+//            CarId = booking.CarId
+//        };
+//        await _context.Bookings.AddAsync(newBooking);
+//        await _context.SaveChangesAsync();
+//                return booking;
+//    }
+//            catch (ArgumentException ex)
+//            {
+//                _logger.LogInformation(ex, "Failed to PostBooking method...");
+//                throw new InvalidOperationException(ex.Message);
+//}
+//        }
+//        private List<BookingCalendarDto> recurringBookings(List<Booking> bookings, DateOnly StartTime, DateOnly EndTime)
+//{
+//    var calendar = new List<BookingCalendarDto>();
 
-        //    //return booking;
+//    foreach (var booking in bookings)
+//    {
+//        var currentDate = booking.BookingDate;
+//        while (currentDate <= (booking.EndRepeatDate ?? booking.BookingDate) && currentDate <= EndTime)
+//        {
+//                    if (currentDate >= StartTime)
+//                    {
+//                        if (booking.RepeatOption == RepeatOption.Weekly && booking.DaysToRepeatOn.HasValue)
+//                        {
+//                            if (((DaysOfWeek)(1 << (int) currentDate.DayOfWeek) & booking.DaysToRepeatOn.Value) == 0)
+//                            {
+//                                currentDate = currentDate.AddDays(1);
+//                                continue;
+//                            }
+//}
 
-        //    throw new NotImplementedException();
-        //}
+//calendar.Add(new BookingCalendarDto
+//{
+//    BookingDate = currentDate,
+//    CarModel = booking.Car.Model,
+//    StartTime = booking.StartTime,
+//    EndTime = booking.EndTime
+//});
+//    }
 
-        // GET: api/SeedData
-        // For test purpose
-        [HttpGet("SeedData")]
+//    currentDate = booking.RepeatOption switch
+//                    {
+//                        RepeatOption.Daily => currentDate.AddDays(1),
+//                        RepeatOption.Weekly => currentDate.AddDays(7),
+//                        _ => booking.EndRepeatDate.HasValue? booking.EndRepeatDate.Value.AddDays(1) : currentDate.AddDays(1)
+//                    };
+//                }
+//            }
+
+//            return calendar;
+//        }
+//        private bool bookingConflictOrNot(BookingCalendarDto existingBooking, CreateUpdateBookingDto newBooking)
+//{
+//    return existingBooking.BookingDate == newBooking.BookingDate &&
+//           !(newBooking.EndTime <= existingBooking.StartTime || newBooking.StartTime >= existingBooking.EndTime);
+//}
+
+// GET: api/SeedData
+// For test purpose
+[HttpGet("SeedData")]
         public async Task<IEnumerable<BookingCalendarDto>> GetSeedData()
         {
-            var cars = await _context.Cars.ToListAsync();
-
-            if (!cars.Any())
+            try
             {
-                cars = GetCars().ToList();
-                await _context.Cars.AddRangeAsync(cars);
-                await _context.SaveChangesAsync();
-            }
+                var cars = await _context.Cars.ToListAsync();
 
-            var bookings = await _context.Bookings.ToListAsync();
-
-            if(!bookings.Any())
-            {
-                bookings = GetBookings().ToList();
-
-                await _context.Bookings.AddRangeAsync(bookings);
-                await _context.SaveChangesAsync();
-            }
-
-            var calendar = new Dictionary<DateOnly, List<Booking>>();
-
-            foreach (var booking in bookings)
-            {
-                var currentDate = booking.BookingDate;
-                while (currentDate <= (booking.EndRepeatDate ?? booking.BookingDate))
+                if (!cars.Any())
                 {
-                    if (!calendar.ContainsKey(currentDate))
-                        calendar[currentDate] = new List<Booking>();
-
-                    calendar[currentDate].Add(booking);
-
-                    currentDate = booking.RepeatOption switch
-                    {
-                        RepeatOption.Daily => currentDate.AddDays(1),
-                        RepeatOption.Weekly => currentDate.AddDays(7),
-                        _ => booking.EndRepeatDate.HasValue ? booking.EndRepeatDate.Value.AddDays(1) : currentDate.AddDays(1)
-                    };
+                    cars = GetCars().ToList();
+        await _context.Cars.AddRangeAsync(cars);
+        await _context.SaveChangesAsync();
                 }
-            }
 
-            List<BookingCalendarDto> result = new List<BookingCalendarDto>();
+                var bookings = await _context.Bookings.ToListAsync();
 
-            foreach (var item in calendar)
-            {
-                foreach(var booking in item.Value)
+                if (!bookings.Any())
                 {
-                    result.Add(new BookingCalendarDto 
-                    { 
-                        BookingDate = booking.BookingDate, 
-                        CarModel = booking.Car.Model, 
-                        StartTime = booking.StartTime, 
-                        EndTime = booking.EndTime 
-                    });
-                }
-            }
+                    bookings = GetBookings().ToList();
 
-            return result;
+    await _context.Bookings.AddRangeAsync(bookings);
+        await _context.SaveChangesAsync();
+                }
+
+                return BookingUtility.GetCalendarBookings(bookings);
+
+            }
+            catch(Exception ex)
+            {
+                _logger.LogInformation(ex,"Failed to GetSeedData method...");
+                throw new InvalidOperationException(ex.Message);
+            }
         }
 
         #region Sample Data
@@ -291,7 +281,6 @@ namespace Wafi.SampleTest.Controllers
             return bookings;
         }
 
-            #endregion
-
-        }
+        #endregion
+    }
 }
